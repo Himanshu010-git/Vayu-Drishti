@@ -367,7 +367,7 @@ Logs shall not unnecessarily expose credentials, private image URLs, or sensitiv
 ### Transparency
 - Show the evidence behind each priority recommendation.
 - Identify missing or simulated data.
-- Preserve the distinction between an AI recommendation and an official decision.
+- Preserve the distinction between an AI recommendation and an official des.
 
 ### Privacy
 - Collect only necessary personal information.
