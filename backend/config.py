@@ -13,9 +13,11 @@ Vision provider is controlled by VISION_PROVIDER:
 
 from __future__ import annotations
 
+import ast
+import json
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
