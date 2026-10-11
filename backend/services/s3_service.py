@@ -104,6 +104,35 @@ def _ensure_bucket(bucket: str, region: str, use_localstack: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mock mode — no real S3 connection needed
+# ---------------------------------------------------------------------------
+
+def _is_mock() -> bool:
+    """Return True when STORAGE_PROVIDER=mock (default for local dev)."""
+    settings = get_settings()
+    return getattr(settings, "STORAGE_PROVIDER", "mock").lower() == "mock"
+
+
+def _mock_upload(report_id: Optional[str], extension: str) -> tuple[str, str]:
+    """Return a fake (s3_key, bucket) without touching AWS."""
+    from datetime import datetime, timezone
+    import uuid
+    rid = report_id or str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    s3_key = f"reports/{now.year}/{now.month:02d}/{now.day:02d}/{rid}.{extension}"
+    bucket = get_settings().S3_BUCKET_NAME
+    logger.info("s3_service [MOCK]: skipping real upload → %s", s3_key)
+    return s3_key, bucket
+
+
+def _mock_signed_url(s3_key: str) -> str:
+    """Return a placeholder image URL without touching AWS."""
+    logger.info("s3_service [MOCK]: returning placeholder image URL for %s", s3_key)
+    # Returns a real placeholder image so the UI doesn't break
+    return "https://placehold.co/800x600/1a2744/06b6d4?text=Mock+Upload"
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -140,6 +169,10 @@ def upload_image(
     S3ServiceError
         If the upload fails for any reason.
     """
+    # ── Mock mode: skip all real AWS calls ──────────────────────────────
+    if _is_mock():
+        return _mock_upload(report_id, extension)
+
     settings = get_settings()
     bucket = settings.S3_BUCKET_NAME
     region = settings.AWS_REGION
@@ -191,6 +224,9 @@ def generate_signed_url(
     bucket: Optional[str] = None,
     expiry_seconds: Optional[int] = None,
 ) -> str:
+    # ── Mock mode ────────────────────────────────────────────────────────
+    if _is_mock():
+        return _mock_signed_url(s3_key)
     """
     Generate a pre-signed GET URL for *s3_key*.
 

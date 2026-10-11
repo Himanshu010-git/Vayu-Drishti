@@ -160,6 +160,19 @@ def get_bounding_box(
 
 
 # ---------------------------------------------------------------------------
+# Mock mode — in-memory store (no AWS needed)
+# ---------------------------------------------------------------------------
+
+def _is_mock() -> bool:
+    """Return True when STORAGE_PROVIDER=mock."""
+    return getattr(get_settings(), "STORAGE_PROVIDER", "mock").lower() == "mock"
+
+
+# In-memory store: report_id -> DustReport
+_MOCK_REPORTS: dict[str, "DustReport"] = {}
+
+
+# ---------------------------------------------------------------------------
 # DustReports CRUD Operations
 # ---------------------------------------------------------------------------
 
@@ -182,6 +195,17 @@ def create_report(report: DustReport) -> DustReport:
     DynamoDBServiceError
         If writing to DynamoDB fails.
     """
+    # ── Mock mode ────────────────────────────────────────────────────────
+    if _is_mock():
+        now = datetime.now(timezone.utc)
+        if not report.created_at:
+            report.created_at = now
+        if not report.updated_at:
+            report.updated_at = now
+        _MOCK_REPORTS[report.report_id] = report
+        logger.info("dynamodb_service [MOCK]: stored report '%s'", report.report_id)
+        return report
+
     table = _get_reports_table()
     now = datetime.now(timezone.utc)
     if not report.created_at:
@@ -220,6 +244,9 @@ def get_report(report_id: str) -> Optional[DustReport]:
     DynamoDBServiceError
         If the query fails.
     """
+    if _is_mock():
+        return _MOCK_REPORTS.get(report_id)
+
     table = _get_reports_table()
     try:
         resp = table.get_item(Key={"report_id": report_id})
@@ -308,6 +335,25 @@ def update_report_analysis(
     DynamoDBServiceError
         If the update operation fails.
     """
+    # ── Mock mode ────────────────────────────────────────────────────────
+    if _is_mock():
+        report = _MOCK_REPORTS.get(report_id)
+        if report is None:
+            raise ReportNotFoundError(f"Report '{report_id}' does not exist")
+        if priority_score is None:
+            dummy = DustReport(report_id=report_id, latitude=report.latitude,
+                               longitude=report.longitude, analysis=analysis)
+            score = dummy.compute_priority()
+        else:
+            score = min(max(float(priority_score), 0.0), 100.0)
+        report.analysis = analysis
+        report.priority_score = score
+        report.status = status
+        report.updated_at = datetime.now(timezone.utc)
+        _MOCK_REPORTS[report_id] = report
+        logger.info("dynamodb_service [MOCK]: updated analysis for '%s'", report_id)
+        return report
+
     table = _get_reports_table()
 
     # If priority score wasn't provided, compute standard score from analysis
@@ -494,6 +540,14 @@ def list_reports(
     status : Optional[ReportStatus]
         Optional status filter.
     """
+    # ── Mock mode ────────────────────────────────────────────────────────
+    if _is_mock():
+        results = list(_MOCK_REPORTS.values())
+        if status is not None:
+            results = [r for r in results if r.status == status]
+        results.sort(key=lambda r: r.created_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        return results[:limit]
+
     table = _get_reports_table()
     scan_kwargs: dict[str, Any] = {}
 
@@ -587,9 +641,24 @@ def find_nearby_reports(
     )
 
     min_lat, max_lat, min_lon, max_lon = get_bounding_box(latitude, longitude, rad)
-
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days) if days and days > 0 else None
+
+    # ── Mock mode: run geo-search on in-memory store ─────────────────────
+    if _is_mock():
+        candidates: list[tuple[DustReport, float]] = []
+        for report in _MOCK_REPORTS.values():
+            if exclude_report_id and report.report_id == exclude_report_id:
+                continue
+            if cutoff and report.created_at and report.created_at < cutoff:
+                continue
+            if not (min_lat <= report.latitude <= max_lat and min_lon <= report.longitude <= max_lon):
+                continue
+            dist = haversine_distance_km(latitude, longitude, report.latitude, report.longitude)
+            if dist <= rad:
+                candidates.append((report, dist))
+        candidates.sort(key=lambda pair: pair[1])
+        return [pair[0] for pair in candidates[:limit]]
 
     table = _get_reports_table()
 
@@ -658,6 +727,10 @@ def record_audit_event(
     details: Optional[dict] = None,
     event_id: Optional[str] = None,
 ) -> dict:
+    # ── Mock mode: silently no-op ───────────────────────────────────────────────
+    if _is_mock():
+        logger.info("dynamodb_service [MOCK]: audit event '%s' logged (no-op)", event_type)
+        return {"event_type": event_type, "mock": True}
     """
     Append an audit entry to the AuditEvents DynamoDB table.
 
