@@ -1,0 +1,23 @@
+# VayuDrishti backend dependencies
+# Install with: pip install -r requirements.txt
+
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# Data validation & settings
+pydantic==2.14.0
+pydantic-settings==2.15.0
+
+# AWS SDK (S3 + DynamoDB + Bedrock)
+boto3==1.43.111
+botocore>=1.34.0
+
+# HTTP client (used by vision_service OpenAI provider)
+httpx>=0.27.0
+
+# Optional: OpenAI vision provider
+openai>=1.40.0
+
+# Python typing backports (for older Python versions)
+typing-extensions>=4.11.0
