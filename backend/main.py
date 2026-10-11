@@ -4,9 +4,11 @@ main.py — VayuDrishti FastAPI application entry point.
 
 Wires together:
   - FastAPI app with CORS middleware
-  - /reports router (submit, fetch, list, nearby)
+  - /api/v1/reports router (submit, fetch, list, nearby)
   - /health liveness probe
-  - Startup logging
+  - / root redirect → /docs
+  - Global exception handler for unhandled errors
+  - Startup / shutdown logging via lifespan context manager
 
 Run locally:
     cd backend
@@ -17,9 +19,12 @@ from __future__ import annotations
 
 import logging
 import sys
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from config import get_settings
 from routers import reports as reports_router
@@ -42,6 +47,36 @@ _configure_logging(settings.LOG_LEVEL)
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Lifespan context manager (replaces deprecated @app.on_event)
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Run startup tasks, yield to serve requests, then run shutdown tasks."""
+    # ---- Startup ----
+    logger.info(
+        "VayuDrishti %s starting up | vision=%s | localstack=%s",
+        settings.APP_VERSION,
+        settings.VISION_PROVIDER,
+        settings.USE_LOCALSTACK,
+    )
+    logger.info(
+        "S3 bucket: %s | DynamoDB table: %s",
+        settings.S3_BUCKET_NAME,
+        settings.DYNAMODB_TABLE_DUST_REPORTS,
+    )
+    if settings.USE_LOCALSTACK:
+        logger.info("LocalStack endpoint: %s", settings.LOCALSTACK_ENDPOINT)
+    logger.info("API docs available at http://127.0.0.1:8000/docs")
+
+    yield  # Application runs here
+
+    # ---- Shutdown ----
+    logger.info("VayuDrishti %s shutting down.", settings.APP_VERSION)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
@@ -56,6 +91,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
@@ -71,10 +107,38 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# Global exception handler
+# ---------------------------------------------------------------------------
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all handler so unhandled errors return structured JSON instead of a 500 traceback."""
+    logger.error(
+        "Unhandled exception on %s %s: %s",
+        request.method,
+        request.url.path,
+        exc,
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "An unexpected internal error occurred. Please try again later."},
+    )
+
+# ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
 
 app.include_router(reports_router.router, prefix="/api/v1")
+
+# ---------------------------------------------------------------------------
+# Root redirect  (/ → /docs for easy browser access)
+# ---------------------------------------------------------------------------
+
+@app.get("/", include_in_schema=False)
+def root_redirect() -> RedirectResponse:
+    """Redirect root to interactive API docs."""
+    return RedirectResponse(url="/docs")
 
 # ---------------------------------------------------------------------------
 # Health check
@@ -89,21 +153,6 @@ def health_check() -> dict:
         "version": settings.APP_VERSION,
         "vision_provider": settings.VISION_PROVIDER,
         "use_localstack": settings.USE_LOCALSTACK,
+        "s3_bucket": settings.S3_BUCKET_NAME,
+        "dynamodb_table": settings.DYNAMODB_TABLE_DUST_REPORTS,
     }
-
-
-# ---------------------------------------------------------------------------
-# Startup event
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    logger.info(
-        "VayuDrishti %s starting up | vision=%s | localstack=%s",
-        settings.APP_VERSION,
-        settings.VISION_PROVIDER,
-        settings.USE_LOCALSTACK,
-    )
-    logger.info(
-        "API docs available at http://127.0.0.1:8000/docs"
-    )
