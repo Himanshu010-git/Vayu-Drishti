@@ -41,3 +41,10 @@ dist/
 # ── Misc ──────────────────────────────────────────────────
 run_setup.py
 *.log
+
+
+# Documentation and Config
+Dummy.md
+frontend.md
+PRD.md
+netlify.toml
